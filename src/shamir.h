@@ -13,7 +13,7 @@
 
 /* Maximum values */
 #define SHAMIR_MAX_SHARES 255
-#define SHAMIR_MAX_SECRET_LEN 65536
+#define SHAMIR_MAX_SECRET_LEN 65535
 
 /* Error codes */
 #define SHAMIR_OK 0

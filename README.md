@@ -64,7 +64,7 @@ Signalforge\KeyShare\share(
 Split a binary or UTF8 secret into shares.
 
 **Parameters:**
-- `$secret` — The secret to split (1 to 65536 bytes)
+- `$secret` — The secret to split (1 to 65535 bytes)
 - `$threshold` — Minimum shares needed to reconstruct (2 to 255)
 - `$shares` — Total number of shares to generate (threshold to 255)
 
@@ -256,14 +256,14 @@ The authentication key is derived from the secret using HKDF style expansion, en
 
 ## Performance
 
-Benchmarks on Intel Core i7 (AVX2 enabled):
+Benchmarks on AMD Ryzen 9 9950X3D (AVX2 enabled):
 
 | Secret Size | Split (5 of 10) | Recover (5 shares) |
 |-------------|-----------------|---------------------|
-| 32 bytes    | 0.02 ms         | 0.01 ms             |
-| 1 KB        | 0.08 ms         | 0.03 ms             |
-| 4 KB        | 0.25 ms         | 0.09 ms             |
-| 64 KB       | 3.8 ms          | 1.4 ms              |
+| 32 bytes    | 0.01 ms         | 0.00 ms             |
+| 1 KB        | 0.07 ms         | 0.02 ms             |
+| 4 KB        | 0.24 ms         | 0.08 ms             |
+| 64 KB       | 3.77 ms         | 1.30 ms             |
 
 SIMD acceleration provides approximately 4x speedup over scalar implementation for large secrets.
 

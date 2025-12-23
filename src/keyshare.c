@@ -153,7 +153,7 @@ PHP_FUNCTION(share)
 
     if (secret_len > SHAMIR_MAX_SECRET_LEN) {
         zend_throw_exception(keyshare_exception_ce,
-            "Secret too long (max 65536 bytes)", 0);
+            "Secret too long (max 65535 bytes)", 0);
         RETURN_THROWS();
     }
 
