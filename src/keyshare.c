@@ -29,8 +29,10 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Exception class */
+/* Exception classes */
 static zend_class_entry *keyshare_exception_ce;
+static zend_class_entry *keyshare_tampering_exception_ce;
+static zend_class_entry *keyshare_insufficient_shares_exception_ce;
 
 /* Encode a share with authenticated envelope to base64 */
 static char *encode_authenticated_share(
@@ -390,7 +392,7 @@ PHP_FUNCTION(recover)
         efree(share_data);
         efree(share_lens);
         efree(raw_shares);
-        zend_throw_exception(keyshare_exception_ce,
+        zend_throw_exception(keyshare_insufficient_shares_exception_ce,
             "Insufficient shares for recovery (need more shares to meet threshold)", 0);
         RETURN_THROWS();
     }
@@ -462,7 +464,7 @@ PHP_FUNCTION(recover)
             efree(secret);
             memset(auth_key, 0, 32);
 
-            zend_throw_exception(keyshare_exception_ce,
+            zend_throw_exception(keyshare_tampering_exception_ce,
                 "Share authentication failed: MAC mismatch (tampered or mixed shares)", 0);
             RETURN_THROWS();
         }
@@ -610,10 +612,18 @@ PHP_MINIT_FUNCTION(keyshare)
     /* Initialize SIMD-optimized GF(256) */
     gf256_simd_init();
 
-    /* Register exception class */
+    /* Register exception classes */
     zend_class_entry ce;
     INIT_NS_CLASS_ENTRY(ce, "Signalforge\\KeyShare", "Exception", NULL);
     keyshare_exception_ce = zend_register_internal_class_ex(&ce, zend_ce_exception);
+
+    zend_class_entry tampering_ce;
+    INIT_NS_CLASS_ENTRY(tampering_ce, "Signalforge\\KeyShare", "TamperingException", NULL);
+    keyshare_tampering_exception_ce = zend_register_internal_class_ex(&tampering_ce, keyshare_exception_ce);
+
+    zend_class_entry insufficient_ce;
+    INIT_NS_CLASS_ENTRY(insufficient_ce, "Signalforge\\KeyShare", "InsufficientSharesException", NULL);
+    keyshare_insufficient_shares_exception_ce = zend_register_internal_class_ex(&insufficient_ce, keyshare_exception_ce);
 
     return SUCCESS;
 }

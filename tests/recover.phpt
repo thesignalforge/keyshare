@@ -7,6 +7,8 @@ keyshare
 use function Signalforge\KeyShare\share;
 use function Signalforge\KeyShare\recover;
 use Signalforge\KeyShare\Exception;
+use Signalforge\KeyShare\TamperingException;
+use Signalforge\KeyShare\InsufficientSharesException;
 
 $secret = "Test secret message";
 $shares = share($secret, 3, 5);
@@ -18,7 +20,7 @@ try {
         2 => $shares[2],
     ]);
     echo "FAIL: Should have thrown exception\n";
-} catch (Exception $e) {
+} catch (InsufficientSharesException $e) {
     echo "OK: " . $e->getMessage() . "\n";
 }
 
@@ -61,7 +63,7 @@ try {
         3 => $shares[3],
     ]);
     echo "FAIL: Should have detected tampered share\n";
-} catch (Exception $e) {
+} catch (TamperingException $e) {
     echo "OK: Detected tampering: " . $e->getMessage() . "\n";
 }
 
@@ -76,7 +78,7 @@ try {
         3 => $shares[3],    // From secret 1
     ]);
     echo "FAIL: Should have detected mixed shares\n";
-} catch (Exception $e) {
+} catch (TamperingException $e) {
     echo "OK: Detected mixed shares: " . $e->getMessage() . "\n";
 }
 

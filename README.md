@@ -87,11 +87,10 @@ Reconstruct a secret from shares.
 
 **Returns:** The original secret as a binary string.
 
-**Throws:** `Signalforge\KeyShare\Exception` on:
-- Insufficient shares for threshold
-- MAC verification failure (tampering detected)
-- Mixed shares from different secrets
-- Malformed envelope structure
+**Throws:**
+- `Signalforge\KeyShare\InsufficientSharesException` — Not enough shares to meet threshold
+- `Signalforge\KeyShare\TamperingException` — MAC verification failure (tampering detected or mixed shares)
+- `Signalforge\KeyShare\Exception` — Malformed envelope structure or other errors
 
 ### passphrase
 
@@ -170,7 +169,7 @@ $ciphertext = openssl_encrypt($data, 'aes-256-gcm', $derivedKey, ...);
 ```php
 use function Signalforge\KeyShare\share;
 use function Signalforge\KeyShare\recover;
-use Signalforge\KeyShare\Exception;
+use Signalforge\KeyShare\TamperingException;
 
 $shares = share("secret", 2, 3);
 
@@ -185,7 +184,7 @@ try {
         1 => $tampered,
         2 => $shares[2],
     ]);
-} catch (Exception $e) {
+} catch (TamperingException $e) {
     echo "Tampering detected: " . $e->getMessage();
     // Output: Share authentication failed: MAC mismatch (tampered or mixed shares)
 }
