@@ -6,6 +6,7 @@
  */
 
 #include "kdf.h"
+#include "../php_keyshare.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -87,7 +88,7 @@ static void sha256_transform(uint32_t state[8], const uint8_t block[64]) {
 
 void sha256(const uint8_t *data, size_t len, uint8_t *hash) {
     uint32_t state[8];
-    uint8_t block[64];
+    uint8_t block[SHA256_BLOCK_SIZE];
     size_t total_len = len;
     uint64_t bit_len;
     int i;
@@ -96,90 +97,94 @@ void sha256(const uint8_t *data, size_t len, uint8_t *hash) {
     memcpy(state, H_INIT, sizeof(H_INIT));
 
     /* Process complete blocks */
-    while (len >= 64) {
+    while (len >= SHA256_BLOCK_SIZE) {
         sha256_transform(state, data);
-        data += 64;
-        len -= 64;
+        data += SHA256_BLOCK_SIZE;
+        len -= SHA256_BLOCK_SIZE;
     }
 
     /* Prepare final block(s) with padding */
-    memset(block, 0, 64);
+    memset(block, 0, SHA256_BLOCK_SIZE);
     memcpy(block, data, len);
     block[len] = 0x80;  /* Append bit '1' */
 
     if (len >= 56) {
         /* Not enough room for length - process this block and add another */
         sha256_transform(state, block);
-        memset(block, 0, 64);
+        memset(block, 0, SHA256_BLOCK_SIZE);
     }
 
     /* Append original message length in bits (big-endian) */
     bit_len = total_len * 8;
-    block[56] = (bit_len >> 56) & 0xFF;
-    block[57] = (bit_len >> 48) & 0xFF;
-    block[58] = (bit_len >> 40) & 0xFF;
-    block[59] = (bit_len >> 32) & 0xFF;
-    block[60] = (bit_len >> 24) & 0xFF;
-    block[61] = (bit_len >> 16) & 0xFF;
-    block[62] = (bit_len >> 8) & 0xFF;
-    block[63] = bit_len & 0xFF;
+    keyshare_write_be64(block + 56, bit_len);
 
     sha256_transform(state, block);
 
     /* Output hash (big-endian) */
     for (i = 0; i < 8; i++) {
-        hash[i * 4] = (state[i] >> 24) & 0xFF;
-        hash[i * 4 + 1] = (state[i] >> 16) & 0xFF;
-        hash[i * 4 + 2] = (state[i] >> 8) & 0xFF;
-        hash[i * 4 + 3] = state[i] & 0xFF;
+        keyshare_write_be32(hash + i * 4, state[i]);
     }
 }
 
-void hmac_sha256(
+int hmac_sha256(
     const uint8_t *key, size_t key_len,
     const uint8_t *data, size_t data_len,
     uint8_t *mac
 ) {
-    uint8_t k_pad[64];
-    uint8_t inner_hash[32];
-    uint8_t outer_data[64 + 32];
-    uint8_t *inner_data;
+    uint8_t k_pad[SHA256_BLOCK_SIZE];
+    uint8_t inner_hash[SHA256_DIGEST_SIZE];
+    uint8_t outer_data[SHA256_BLOCK_SIZE + SHA256_DIGEST_SIZE];
+    uint8_t *inner_data = NULL;
+    uint8_t key_hash[SHA256_DIGEST_SIZE];
+    size_t inner_len;
     int i;
+    int result = 0;
+
+    /* Check for overflow in inner buffer size calculation */
+    inner_len = keyshare_safe_add(SHA256_BLOCK_SIZE, data_len);
+    if (inner_len == 0 && data_len != 0) {
+        return -1;  /* Overflow */
+    }
 
     /* Allocate buffer for inner hash input */
-    inner_data = (uint8_t *)malloc(64 + data_len);
+    inner_data = (uint8_t *)malloc(inner_len);
     if (!inner_data) {
-        memset(mac, 0, 32);
-        return;
+        return -1;
     }
 
     /* If key is longer than block size, hash it */
-    uint8_t key_hash[32];
-    if (key_len > 64) {
+    if (key_len > SHA256_BLOCK_SIZE) {
         sha256(key, key_len, key_hash);
         key = key_hash;
-        key_len = 32;
+        key_len = SHA256_DIGEST_SIZE;
     }
 
     /* Prepare key pad */
-    memset(k_pad, 0, 64);
+    memset(k_pad, 0, SHA256_BLOCK_SIZE);
     memcpy(k_pad, key, key_len);
 
     /* Inner hash: SHA256((key XOR ipad) || data) */
-    for (i = 0; i < 64; i++) {
-        inner_data[i] = k_pad[i] ^ 0x36;
+    for (i = 0; i < SHA256_BLOCK_SIZE; i++) {
+        inner_data[i] = k_pad[i] ^ HMAC_IPAD;
     }
-    memcpy(inner_data + 64, data, data_len);
-    sha256(inner_data, 64 + data_len, inner_hash);
+    memcpy(inner_data + SHA256_BLOCK_SIZE, data, data_len);
+    sha256(inner_data, inner_len, inner_hash);
 
     /* Outer hash: SHA256((key XOR opad) || inner_hash) */
-    for (i = 0; i < 64; i++) {
-        outer_data[i] = k_pad[i] ^ 0x5c;
+    for (i = 0; i < SHA256_BLOCK_SIZE; i++) {
+        outer_data[i] = k_pad[i] ^ HMAC_OPAD;
     }
-    memcpy(outer_data + 64, inner_hash, 32);
-    sha256(outer_data, 64 + 32, mac);
+    memcpy(outer_data + SHA256_BLOCK_SIZE, inner_hash, SHA256_DIGEST_SIZE);
+    sha256(outer_data, SHA256_BLOCK_SIZE + SHA256_DIGEST_SIZE, mac);
+
+    /* Secure cleanup of sensitive data */
+    keyshare_secure_zero(k_pad, sizeof(k_pad));
+    keyshare_secure_zero(key_hash, sizeof(key_hash));
+    keyshare_secure_zero(inner_hash, sizeof(inner_hash));
+    keyshare_secure_zero(inner_data, inner_len);
 
     free(inner_data);
+    return result;
 }
 
 int pbkdf2_sha256(
@@ -188,14 +193,22 @@ int pbkdf2_sha256(
     uint32_t iterations,
     uint8_t *dk, size_t dk_len
 ) {
-    uint8_t U[32], T[32];
-    uint8_t *salt_block;
+    uint8_t U[SHA256_DIGEST_SIZE], T[SHA256_DIGEST_SIZE];
+    uint8_t *salt_block = NULL;
     uint32_t block_num = 1;
     size_t dk_offset = 0;
     uint32_t i, j;
+    size_t salt_block_len;
+    int result = 0;
+
+    /* Check for overflow in salt block size */
+    salt_block_len = keyshare_safe_add(salt_len, 4);
+    if (salt_block_len == 0 && salt_len != 0) {
+        return -1;  /* Overflow */
+    }
 
     /* Allocate salt block buffer */
-    salt_block = (uint8_t *)malloc(salt_len + 4);
+    salt_block = (uint8_t *)malloc(salt_block_len);
     if (!salt_block) {
         return -1;
     }
@@ -203,69 +216,102 @@ int pbkdf2_sha256(
     while (dk_offset < dk_len) {
         /* U_1 = PRF(Password, Salt || INT_32_BE(block_num)) */
         memcpy(salt_block, salt, salt_len);
-        salt_block[salt_len] = (block_num >> 24) & 0xFF;
-        salt_block[salt_len + 1] = (block_num >> 16) & 0xFF;
-        salt_block[salt_len + 2] = (block_num >> 8) & 0xFF;
-        salt_block[salt_len + 3] = block_num & 0xFF;
+        keyshare_write_be32(salt_block + salt_len, block_num);
 
-        hmac_sha256(password, password_len, salt_block, salt_len + 4, U);
-        memcpy(T, U, 32);
+        if (hmac_sha256(password, password_len, salt_block, salt_block_len, U) != 0) {
+            result = -1;
+            goto cleanup;
+        }
+        memcpy(T, U, SHA256_DIGEST_SIZE);
 
         /* U_2 ... U_c */
         for (i = 1; i < iterations; i++) {
-            hmac_sha256(password, password_len, U, 32, U);
-            for (j = 0; j < 32; j++) {
+            if (hmac_sha256(password, password_len, U, SHA256_DIGEST_SIZE, U) != 0) {
+                result = -1;
+                goto cleanup;
+            }
+            for (j = 0; j < SHA256_DIGEST_SIZE; j++) {
                 T[j] ^= U[j];
             }
         }
 
         /* Copy to derived key */
-        size_t copy_len = (dk_len - dk_offset > 32) ? 32 : (dk_len - dk_offset);
+        size_t copy_len = (dk_len - dk_offset > SHA256_DIGEST_SIZE)
+                          ? SHA256_DIGEST_SIZE
+                          : (dk_len - dk_offset);
         memcpy(dk + dk_offset, T, copy_len);
         dk_offset += copy_len;
         block_num++;
     }
 
+cleanup:
+    /* Secure cleanup */
+    keyshare_secure_zero(U, sizeof(U));
+    keyshare_secure_zero(T, sizeof(T));
+    keyshare_secure_zero(salt_block, salt_block_len);
     free(salt_block);
-    return 0;
+
+    return result;
 }
 
-void kdf_expand(
+int kdf_expand(
     const uint8_t *seed, size_t seed_len,
     const uint8_t *info, size_t info_len,
     uint8_t *out, size_t out_len
 ) {
-    uint8_t T[32] = {0};
+    uint8_t T[SHA256_DIGEST_SIZE] = {0};
     uint8_t counter = 1;
     size_t offset = 0;
-    uint8_t *hmac_data;
+    uint8_t *hmac_data = NULL;
     size_t hmac_len;
+    size_t hmac_buf_size;
+    int result = 0;
+
+    /* Check for overflow: 32 + info_len + 1 */
+    hmac_buf_size = keyshare_safe_add(SHA256_DIGEST_SIZE, info_len);
+    if (hmac_buf_size == 0 && info_len != 0) {
+        return -1;  /* Overflow */
+    }
+    hmac_buf_size = keyshare_safe_add(hmac_buf_size, 1);
+    if (hmac_buf_size == 0) {
+        return -1;  /* Overflow */
+    }
 
     /* Allocate buffer */
-    hmac_data = (uint8_t *)malloc(32 + info_len + 1);
+    hmac_data = (uint8_t *)malloc(hmac_buf_size);
     if (!hmac_data) {
         memset(out, 0, out_len);
-        return;
+        return -1;
     }
 
     while (offset < out_len) {
         /* T(n) = HMAC(seed, T(n-1) || info || counter) */
         hmac_len = 0;
         if (counter > 1) {
-            memcpy(hmac_data, T, 32);
-            hmac_len = 32;
+            memcpy(hmac_data, T, SHA256_DIGEST_SIZE);
+            hmac_len = SHA256_DIGEST_SIZE;
         }
         memcpy(hmac_data + hmac_len, info, info_len);
         hmac_len += info_len;
         hmac_data[hmac_len++] = counter;
 
-        hmac_sha256(seed, seed_len, hmac_data, hmac_len, T);
+        if (hmac_sha256(seed, seed_len, hmac_data, hmac_len, T) != 0) {
+            result = -1;
+            goto cleanup;
+        }
 
-        size_t copy_len = (out_len - offset > 32) ? 32 : (out_len - offset);
+        size_t copy_len = (out_len - offset > SHA256_DIGEST_SIZE)
+                          ? SHA256_DIGEST_SIZE
+                          : (out_len - offset);
         memcpy(out + offset, T, copy_len);
         offset += copy_len;
         counter++;
     }
 
+cleanup:
+    keyshare_secure_zero(T, sizeof(T));
+    keyshare_secure_zero(hmac_data, hmac_buf_size);
     free(hmac_data);
+
+    return result;
 }

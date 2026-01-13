@@ -8,46 +8,63 @@
 #include "shamir.h"
 #include "gf256_simd.h"
 #include "kdf.h"
+#include "../php_keyshare.h"
 #include <string.h>
 #include <stdlib.h>
 
 /*
  * Deterministic PRNG using SHA-256 in counter mode.
+ *
  * Used to generate polynomial coefficients from seed.
+ * This ensures reproducible share generation for the same seed,
+ * which is essential for deterministic secret sharing.
  */
 typedef struct {
-    uint8_t key[32];
+    uint8_t key[SHA256_DIGEST_SIZE];
     uint64_t counter;
-    uint8_t buffer[32];
+    uint8_t buffer[SHAMIR_PRNG_BUFFER_SIZE];
     size_t buffer_pos;
 } prng_state;
 
+/*
+ * Initialize PRNG state from seed.
+ *
+ * The seed is hashed to derive the internal key, providing
+ * uniform distribution regardless of seed quality.
+ */
 static void prng_init(prng_state *state, const uint8_t *seed, size_t seed_len) {
     sha256(seed, seed_len, state->key);
     state->counter = 0;
-    state->buffer_pos = 32;
+    state->buffer_pos = SHAMIR_PRNG_BUFFER_SIZE;  /* Force refill on first use */
 }
 
+/*
+ * Generate the next pseudorandom byte.
+ *
+ * Uses SHA-256(key || counter) to generate blocks of random bytes.
+ * Counter is incremented after each block to ensure forward secrecy.
+ */
 static uint8_t prng_next(prng_state *state) {
-    if (state->buffer_pos >= 32) {
-        uint8_t input[40];
-        memcpy(input, state->key, 32);
-        input[32] = (state->counter >> 56) & 0xFF;
-        input[33] = (state->counter >> 48) & 0xFF;
-        input[34] = (state->counter >> 40) & 0xFF;
-        input[35] = (state->counter >> 32) & 0xFF;
-        input[36] = (state->counter >> 24) & 0xFF;
-        input[37] = (state->counter >> 16) & 0xFF;
-        input[38] = (state->counter >> 8) & 0xFF;
-        input[39] = state->counter & 0xFF;
-        sha256(input, 40, state->buffer);
+    if (state->buffer_pos >= SHAMIR_PRNG_BUFFER_SIZE) {
+        uint8_t input[SHA256_DIGEST_SIZE + 8];
+
+        /* Prepare input: key || counter (big-endian) */
+        memcpy(input, state->key, SHA256_DIGEST_SIZE);
+        keyshare_write_be64(input + SHA256_DIGEST_SIZE, state->counter);
+
+        sha256(input, sizeof(input), state->buffer);
         state->counter++;
         state->buffer_pos = 0;
+
+        /* Clear sensitive input data */
+        keyshare_secure_zero(input, sizeof(input));
     }
     return state->buffer[state->buffer_pos++];
 }
 
-/* Generate random bytes into buffer */
+/*
+ * Generate random bytes into buffer.
+ */
 static void prng_fill(prng_state *state, uint8_t *buf, size_t len) {
     for (size_t i = 0; i < len; i++) {
         buf[i] = prng_next(state);
@@ -55,10 +72,20 @@ static void prng_fill(prng_state *state, uint8_t *buf, size_t len) {
 }
 
 /*
+ * Securely clear PRNG state.
+ */
+static void prng_clear(prng_state *state) {
+    keyshare_secure_zero(state, sizeof(prng_state));
+}
+
+/*
  * Compute Lagrange basis polynomial l_i(0).
  *
- * l_i(0) = product_{j!=i} (0 - x_j) / (x_i - x_j)
- *        = product_{j!=i} x_j / (x_i ^ x_j)  [in GF(256)]
+ * For reconstruction at x=0:
+ *   l_i(0) = product_{j!=i} (0 - x_j) / (x_i - x_j)
+ *          = product_{j!=i} x_j / (x_i ^ x_j)  [in GF(256)]
+ *
+ * In GF(256), subtraction is XOR, and 0 - x_j = x_j.
  */
 uint8_t shamir_lagrange_basis(uint8_t i, const uint8_t *indices, size_t k) {
     uint8_t xi = indices[i];
@@ -77,6 +104,10 @@ uint8_t shamir_lagrange_basis(uint8_t i, const uint8_t *indices, size_t k) {
 
 /*
  * Split a secret into shares using SIMD-accelerated operations.
+ *
+ * For each byte position, we construct a polynomial of degree (threshold-1)
+ * where the constant term is the secret byte and other coefficients are random.
+ * Each share is the polynomial evaluated at a distinct non-zero point.
  */
 int shamir_split(
     const uint8_t *secret,
@@ -87,8 +118,13 @@ int shamir_split(
     const uint8_t *rng_seed,
     size_t seed_len
 ) {
+    prng_state rng;
+    uint8_t **coeffs = NULL;
+    uint8_t c;
+    int result = SHAMIR_OK;
+
     /* Validate parameters */
-    if (threshold < 2) {
+    if (threshold < SHAMIR_MIN_THRESHOLD) {
         return SHAMIR_ERR_INVALID_THRESHOLD;
     }
     if (num_shares < threshold) {
@@ -98,7 +134,6 @@ int shamir_split(
         return SHAMIR_ERR_INVALID_SHARES;
     }
 
-    prng_state rng;
     prng_init(&rng, rng_seed, seed_len);
 
     /*
@@ -109,28 +144,31 @@ int shamir_split(
      * coeffs[0] = secret (constant term)
      * coeffs[1..threshold-1] = random coefficients
      */
-    uint8_t **coeffs = malloc(sizeof(uint8_t *) * threshold);
+    coeffs = malloc(sizeof(uint8_t *) * threshold);
     if (!coeffs) {
+        prng_clear(&rng);
         return SHAMIR_ERR_MEMORY;
     }
 
-    for (uint8_t c = 0; c < threshold; c++) {
+    /* Initialize all pointers to NULL for safe cleanup */
+    for (c = 0; c < threshold; c++) {
+        coeffs[c] = NULL;
+    }
+
+    /* Allocate coefficient buffers */
+    for (c = 0; c < threshold; c++) {
         coeffs[c] = malloc(secret_len);
         if (!coeffs[c]) {
-            for (uint8_t j = 0; j < c; j++) {
-                memset(coeffs[j], 0, secret_len);
-                free(coeffs[j]);
-            }
-            free(coeffs);
-            return SHAMIR_ERR_MEMORY;
+            result = SHAMIR_ERR_MEMORY;
+            goto cleanup;
         }
     }
 
     /* Set constant term to secret */
     memcpy(coeffs[0], secret, secret_len);
 
-    /* Generate random coefficients */
-    for (uint8_t c = 1; c < threshold; c++) {
+    /* Generate random coefficients for higher degree terms */
+    for (c = 1; c < threshold; c++) {
         prng_fill(&rng, coeffs[c], secret_len);
     }
 
@@ -140,19 +178,30 @@ int shamir_split(
         gf256_eval_poly_batch(shares[s], (const uint8_t **)coeffs, threshold, secret_len, x);
     }
 
-    /* Clear and free coefficients */
-    for (uint8_t c = 0; c < threshold; c++) {
-        memset(coeffs[c], 0, secret_len);
-        free(coeffs[c]);
+cleanup:
+    /* Secure cleanup of all coefficient buffers */
+    if (coeffs) {
+        for (c = 0; c < threshold; c++) {
+            if (coeffs[c]) {
+                keyshare_secure_zero(coeffs[c], secret_len);
+                free(coeffs[c]);
+            }
+        }
+        free(coeffs);
     }
-    free(coeffs);
-    memset(&rng, 0, sizeof(rng));
+    prng_clear(&rng);
 
-    return SHAMIR_OK;
+    return result;
 }
 
 /*
  * Recover secret from shares using SIMD-accelerated Lagrange interpolation.
+ *
+ * Given k shares, the secret is recovered by evaluating the interpolating
+ * polynomial at x=0:
+ *   secret[b] = sum_{i=0}^{k-1} share[i][b] * l_i(0)
+ *
+ * where l_i(0) is the Lagrange basis polynomial.
  */
 int shamir_recover(
     const uint8_t **shares,
@@ -161,7 +210,7 @@ int shamir_recover(
     size_t share_len,
     uint8_t *secret
 ) {
-    if (num_shares < 2) {
+    if (num_shares < SHAMIR_MIN_THRESHOLD) {
         return SHAMIR_ERR_INSUFFICIENT_SHARES;
     }
 
@@ -180,8 +229,11 @@ int shamir_recover(
     /* Initialize secret to zero */
     memset(secret, 0, share_len);
 
-    /* Lagrange interpolation at x=0:
-     * secret = sum_{i=0}^{k-1} share[i] * l_i(0)
+    /*
+     * Lagrange interpolation at x=0:
+     *   secret = sum_{i=0}^{k-1} share[i] * l_i(0)
+     *
+     * Using SIMD-accelerated addmul for efficiency.
      */
     for (size_t i = 0; i < num_shares; i++) {
         uint8_t basis = shamir_lagrange_basis(i, indices, num_shares);

@@ -24,8 +24,14 @@
 /* Auth tag size (HMAC-SHA256) */
 #define ENVELOPE_TAG_SIZE 32
 
-/* Minimum envelope size */
+/* Minimum envelope size (header + minimum 1-byte payload + tag) */
 #define ENVELOPE_MIN_SIZE (ENVELOPE_HEADER_SIZE + 1 + ENVELOPE_TAG_SIZE)
+
+/* Maximum payload length (limited by 16-bit length field) */
+#define ENVELOPE_MAX_PAYLOAD 65535
+
+/* Stack buffer threshold for compute_auth_tag */
+#define ENVELOPE_STACK_BUF_SIZE 256
 
 /* Error codes */
 #define ENVELOPE_OK 0
@@ -34,6 +40,8 @@
 #define ENVELOPE_ERR_TOO_SHORT -3
 #define ENVELOPE_ERR_LENGTH_MISMATCH -4
 #define ENVELOPE_ERR_THRESHOLD_MISMATCH -5
+#define ENVELOPE_ERR_PAYLOAD_TOO_LARGE -6
+#define ENVELOPE_ERR_MEMORY -7
 
 /*
  * Create an authenticated envelope for a share.
@@ -97,8 +105,11 @@ int envelope_verify(
  *   secret      - Input secret
  *   secret_len  - Length of secret
  *   auth_key    - Output: 32-byte authentication key
+ *
+ * Returns:
+ *   0 on success, -1 on failure.
  */
-void envelope_derive_auth_key(
+int envelope_derive_auth_key(
     const uint8_t *secret,
     size_t secret_len,
     uint8_t *auth_key
