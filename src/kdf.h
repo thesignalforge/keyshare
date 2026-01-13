@@ -17,6 +17,10 @@
 /* PBKDF2 defaults */
 #define PBKDF2_DEFAULT_ITERATIONS 100000
 
+/* HMAC constants */
+#define HMAC_IPAD 0x36
+#define HMAC_OPAD 0x5c
+
 /*
  * SHA-256 hash function.
  *
@@ -36,8 +40,11 @@ void sha256(const uint8_t *data, size_t len, uint8_t *hash);
  *   data     - Input data
  *   data_len - Length of data
  *   mac      - Output buffer (32 bytes)
+ *
+ * Returns:
+ *   0 on success, -1 on memory allocation failure.
  */
-void hmac_sha256(
+int hmac_sha256(
     const uint8_t *key, size_t key_len,
     const uint8_t *data, size_t data_len,
     uint8_t *mac
@@ -76,8 +83,11 @@ int pbkdf2_sha256(
  *   info_len - Length of info
  *   out      - Output buffer
  *   out_len  - Desired output length
+ *
+ * Returns:
+ *   0 on success, -1 on memory allocation failure.
  */
-void kdf_expand(
+int kdf_expand(
     const uint8_t *seed, size_t seed_len,
     const uint8_t *info, size_t info_len,
     uint8_t *out, size_t out_len

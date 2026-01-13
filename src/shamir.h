@@ -15,6 +15,12 @@
 #define SHAMIR_MAX_SHARES 255
 #define SHAMIR_MAX_SECRET_LEN 65535
 
+/* Minimum threshold for meaningful secret sharing */
+#define SHAMIR_MIN_THRESHOLD 2
+
+/* PRNG buffer size for coefficient generation */
+#define SHAMIR_PRNG_BUFFER_SIZE 32
+
 /* Error codes */
 #define SHAMIR_OK 0
 #define SHAMIR_ERR_INVALID_THRESHOLD -1
