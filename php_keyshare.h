@@ -3,6 +3,11 @@
  *
  * Shamir's Secret Sharing implementation for PHP 8.3+
  * Namespace: Signalforge\KeyShare
+ *
+ * This is the 2.x series. The crypto primitives are now sourced from
+ * libsodium (HMAC-SHA512/256, Argon2id, BLAKE2b, CSPRNG) and libgfshare
+ * (GF(256) secret sharing math). The 1.x series used a hand-rolled stack;
+ * 1.x shares are NOT recoverable by 2.x — see MIGRATION.md.
  */
 
 #ifndef PHP_KEYSHARE_H
@@ -17,61 +22,64 @@
 #include "ext/standard/info.h"
 #include "zend_exceptions.h"
 
-#define PHP_KEYSHARE_VERSION "1.0.0"
+#include <sodium.h>
+
+#define PHP_KEYSHARE_VERSION "2.0.0"
 #define PHP_KEYSHARE_EXTNAME "keyshare"
 
 /*
  * Cryptographic Constants
  *
  * These values define the security parameters for the extension.
- * Changes here affect security guarantees - modify with caution.
+ * Changes here affect security guarantees — modify with caution.
  */
 
-/* Maximum number of shares (limited by GF(256) field size) */
+/* Maximum number of shares (limited by GF(256) field size). */
 #define KEYSHARE_MAX_SHARES 255
 
-/* Maximum secret length in bytes */
+/* Maximum secret length in bytes. */
 #define KEYSHARE_MAX_SECRET_LEN 65535
 
-/* Minimum threshold for secret sharing */
+/* Minimum threshold for secret sharing. */
 #define KEYSHARE_MIN_THRESHOLD 2
 
-/* Derived key length for passphrase-based sharing (256 bits) */
+/* Derived key length for passphrase-based sharing (256 bits). */
 #define KEYSHARE_DERIVED_KEY_LEN 32
 
-/* PBKDF2 salt length */
-#define KEYSHARE_SALT_LEN 16
-
-/* Default PBKDF2 iterations (100,000 for security) */
-#define KEYSHARE_PBKDF2_ITERATIONS 100000
-
-/* SHA-256 output size */
-#define KEYSHARE_SHA256_LEN 32
-
-/* HMAC-SHA256 block size */
-#define KEYSHARE_HMAC_BLOCK_SIZE 64
-
 /*
- * Context strings for key derivation.
- * These provide domain separation between different key uses.
+ * Authentication tag size. Equal to libsodium crypto_auth_BYTES (32).
+ * We redeclare as a preprocessor symbol so envelope sizing can be used
+ * in static-array contexts. Verified against libsodium in MINIT.
  */
-#define KEYSHARE_SALT_CONTEXT "signalforge-keyshare-salt-v1"
-#define KEYSHARE_SALT_CONTEXT_LEN 28
+#define KEYSHARE_AUTH_TAG_LEN 32
 
-#define KEYSHARE_AUTH_CONTEXT "signalforge-keyshare-auth-v1"
-#define KEYSHARE_AUTH_CONTEXT_LEN 28
+/* Authentication key size. Equal to libsodium crypto_auth_KEYBYTES (32). */
+#define KEYSHARE_AUTH_KEY_LEN 32
 
 /*
- * Secure memory clearing macro.
+ * Domain-separation personalizations for BLAKE2b-based derivations.
  *
- * Uses volatile pointer to prevent compiler optimization.
- * This is critical for clearing sensitive data like keys.
+ * These strings give each key/salt its own namespace so a compromise
+ * of one derived value cannot be replayed against another use. We use
+ * the BLAKE2b "personal" input rather than prefix-and-hash because the
+ * primitive supports it natively and it has no length-extension edges.
+ *
+ * v2 prefix is deliberate: if a future v3 needs new keys, it must pick
+ * a new personalization string to remain incompatible with v2.
+ */
+#define KEYSHARE_SALT_PERSONAL     "keyshare-v2-salt"      /* 16 bytes */
+#define KEYSHARE_AUTH_PERSONAL     "keyshare-v2-authkey"   /* 19 bytes */
+
+/*
+ * Secure memory clearing — delegates to libsodium's sodium_memzero().
+ *
+ * libsodium's implementation is hardened against compiler dead-store
+ * elimination (uses platform-specific memory barriers like SecureZeroMemory
+ * on Windows, explicit_bzero on BSD/glibc, etc). The previous hand-rolled
+ * volatile loop could still be elided by sufficiently aggressive optimizers.
  */
 static inline void keyshare_secure_zero(void *ptr, size_t len) {
-	volatile unsigned char *p = (volatile unsigned char *)ptr;
-	while (len--) {
-		*p++ = 0;
-	}
+	sodium_memzero(ptr, len);
 }
 
 /*
@@ -98,30 +106,6 @@ static inline void keyshare_write_be16(uint8_t *buf, uint16_t val) {
  */
 static inline uint16_t keyshare_read_be16(const uint8_t *buf) {
 	return ((uint16_t)buf[0] << 8) | buf[1];
-}
-
-/*
- * Write a 64-bit big-endian value to a buffer.
- */
-static inline void keyshare_write_be64(uint8_t *buf, uint64_t val) {
-	buf[0] = (val >> 56) & 0xFF;
-	buf[1] = (val >> 48) & 0xFF;
-	buf[2] = (val >> 40) & 0xFF;
-	buf[3] = (val >> 32) & 0xFF;
-	buf[4] = (val >> 24) & 0xFF;
-	buf[5] = (val >> 16) & 0xFF;
-	buf[6] = (val >> 8) & 0xFF;
-	buf[7] = val & 0xFF;
-}
-
-/*
- * Write a 32-bit big-endian value to a buffer.
- */
-static inline void keyshare_write_be32(uint8_t *buf, uint32_t val) {
-	buf[0] = (val >> 24) & 0xFF;
-	buf[1] = (val >> 16) & 0xFF;
-	buf[2] = (val >> 8) & 0xFF;
-	buf[3] = val & 0xFF;
 }
 
 extern zend_module_entry keyshare_module_entry;

@@ -33,13 +33,23 @@ $recovered = recover([
 ]);
 echo "Recovered key length: " . strlen($recovered) . " bytes\n";
 
-echo "\n=== Test 3: Determinism ===\n";
+echo "\n=== Test 3: Non-determinism (Shamir security property) ===\n";
+// Same passphrase MUST produce different shares — the polynomial seed
+// comes from a CSPRNG, not from the passphrase. (audit C-K-1)
 $shares2 = passphrase($pass, 3, 5);
-echo "Same passphrase produces same shares: " . ($shares === $shares2 ? "YES" : "NO") . "\n";
+echo "Two splits produce different shares: " . ($shares !== $shares2 ? "YES" : "NO") . "\n";
 
-echo "\n=== Test 4: Different passphrase produces different shares ===\n";
+// But the underlying key (derived from passphrase) is the same, so both
+// share-sets recover to the same key.
+$key_a = recover([1 => $shares[1], 2 => $shares[2], 3 => $shares[3]]);
+$key_b = recover([1 => $shares2[1], 2 => $shares2[2], 3 => $shares2[3]]);
+echo "Both share-sets recover the same derived key: "
+    . ($key_a === $key_b ? "YES" : "NO") . "\n";
+
+echo "\n=== Test 4: Different passphrase produces different key ===\n";
 $shares3 = passphrase("different passphrase", 3, 5);
-echo "Different passphrase produces different shares: " . ($shares !== $shares3 ? "YES" : "NO") . "\n";
+$key_c = recover([1 => $shares3[1], 2 => $shares3[2], 3 => $shares3[3]]);
+echo "Different passphrase yields different key: " . ($key_a !== $key_c ? "YES" : "NO") . "\n";
 
 echo "\n=== Test 5: Any valid combination works ===\n";
 $recovered2 = recover([
@@ -98,11 +108,12 @@ All shares valid: YES
 === Test 2: Recovery with threshold shares ===
 Recovered key length: 32 bytes
 
-=== Test 3: Determinism ===
-Same passphrase produces same shares: YES
+=== Test 3: Non-determinism (Shamir security property) ===
+Two splits produce different shares: YES
+Both share-sets recover the same derived key: YES
 
-=== Test 4: Different passphrase produces different shares ===
-Different passphrase produces different shares: YES
+=== Test 4: Different passphrase produces different key ===
+Different passphrase yields different key: YES
 
 === Test 5: Any valid combination works ===
 Different combination produces same key: YES

@@ -41,13 +41,15 @@ size_t base64_encode(const uint8_t *input, size_t input_len, char *output);
  * Decode Base64 string to binary data.
  *
  * Parameters:
- *   input      - Input Base64 string (null-terminated)
+ *   input      - Input Base64 string (does NOT need to be null-terminated)
+ *   input_len  - Length of input in bytes (does NOT call strlen — pass the
+ *                actual byte length so embedded NULs don't truncate the input)
  *   output     - Output buffer
  *   output_len - Pointer to store actual decoded length
  *
  * Returns:
  *   0 on success, -1 on invalid input
  */
-int base64_decode(const char *input, uint8_t *output, size_t *output_len);
+int base64_decode(const char *input, size_t input_len, uint8_t *output, size_t *output_len);
 
 #endif /* KEYSHARE_BASE64_H */

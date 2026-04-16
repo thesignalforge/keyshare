@@ -9,36 +9,34 @@ PHP_ARG_ENABLE([keyshare],
 if test "$PHP_KEYSHARE" != "no"; then
   AC_DEFINE(HAVE_KEYSHARE, 1, [ Have keyshare support ])
 
-  dnl Check for SIMD support and set appropriate flags
-  SIMD_FLAGS=""
+  dnl libsodium provides:
+  dnl   - crypto_auth / crypto_auth_verify (HMAC-SHA512/256, 32-byte MAC)
+  dnl   - crypto_pwhash (Argon2id) for passphrase-based key derivation
+  dnl   - crypto_generichash (BLAKE2b) for domain-separated key/salt derivation
+  dnl   - randombytes_buf for CSPRNG seed material
+  dnl   - sodium_memzero for hardened secure-erase
+  dnl PHP itself ships with sodium (--with-sodium), so the headers and lib
+  dnl should be available system-wide on any modern build.
+  AC_CHECK_LIB([sodium], [sodium_init], [
+    PHP_ADD_LIBRARY([sodium],, KEYSHARE_SHARED_LIBADD)
+  ], [
+    AC_MSG_ERROR([libsodium is required. Install libsodium-dev (Debian/Ubuntu) or libsodium-devel (RHEL/Fedora).])
+  ])
 
-  dnl Check if we're on x86/x86_64
-  case $host_cpu in
-    i?86|x86_64)
-      dnl Enable SSE2 (standard on x86_64)
-      SIMD_FLAGS="-msse2 -mssse3"
+  dnl libgfshare provides GF(256) Shamir's Secret Sharing math.
+  dnl We use gfshare_ctx_init_enc / gfshare_ctx_init_dec and drive the
+  dnl per-byte random coefficient fill through gfshare_fill_rand, which
+  dnl we set to a libsodium-backed randombytes_buf wrapper at MINIT.
+  AC_CHECK_LIB([gfshare], [gfshare_ctx_init_enc], [
+    PHP_ADD_LIBRARY([gfshare],, KEYSHARE_SHARED_LIBADD)
+  ], [
+    AC_MSG_ERROR([libgfshare is required. Install libgfshare-dev (Debian/Ubuntu) or libgfshare-devel (RHEL/Fedora).])
+  ])
 
-      dnl Check for AVX2 support in compiler
-      AC_MSG_CHECKING([for AVX2 support])
-      old_CFLAGS="$CFLAGS"
-      CFLAGS="$CFLAGS -mavx2"
-      AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-        #include <immintrin.h>
-      ]], [[
-        __m256i a = _mm256_setzero_si256();
-        (void)a;
-      ]])], [
-        AC_MSG_RESULT([yes])
-        SIMD_FLAGS="-msse2 -mssse3 -mavx2"
-      ], [
-        AC_MSG_RESULT([no])
-      ])
-      CFLAGS="$old_CFLAGS"
-      ;;
-  esac
+  PHP_SUBST(KEYSHARE_SHARED_LIBADD)
 
   PHP_NEW_EXTENSION(keyshare,
-    src/keyshare.c src/gf256_simd.c src/shamir.c src/kdf.c src/base64.c src/envelope.c,
-    $ext_shared,, -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -Wall -O2 $SIMD_FLAGS)
+    src/keyshare.c src/base64.c src/envelope.c,
+    $ext_shared,, -DZEND_ENABLE_STATIC_TSRMLS_CACHE=1 -Wall -O2)
   PHP_ADD_BUILD_DIR($ext_builddir/src)
 fi

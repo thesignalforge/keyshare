@@ -67,8 +67,10 @@ size_t base64_encode(const uint8_t *input, size_t input_len, char *output) {
     return j;
 }
 
-int base64_decode(const char *input, uint8_t *output, size_t *output_len) {
-    size_t len = strlen(input);
+int base64_decode(const char *input, size_t input_len, uint8_t *output, size_t *output_len) {
+    /* Use the explicit length — strlen() would silently truncate at any
+     * embedded NUL byte (security hazard). (audit H-K-2) */
+    size_t len = input_len;
     size_t i, j;
     int8_t a, b, c, d;
     uint32_t triple;

@@ -48,9 +48,18 @@ echo "Recovered matches (4 shares): " . ($recovered2 === $secret ? "YES" : "NO")
 $recovered3 = recover($shares);
 echo "Recovered matches (all shares): " . ($recovered3 === $secret ? "YES" : "NO") . "\n";
 
-echo "\n=== Test 2: Determinism ===\n";
+echo "\n=== Test 2: Non-determinism (Shamir security property) ===\n";
+// Each call MUST produce different shares — this is what makes Shamir
+// information-theoretically secure. If shares were deterministic from
+// the secret, an attacker with t-1 shares could brute-force the secret.
 $shares2 = share($secret, 3, 5);
-echo "Same input produces same shares: " . ($shares === $shares2 ? "YES" : "NO") . "\n";
+echo "Two splits produce different shares: " . ($shares !== $shares2 ? "YES" : "NO") . "\n";
+
+// But both share-sets must recover the original secret
+$recovered_a = recover([1 => $shares[1], 2 => $shares[2], 3 => $shares[3]]);
+$recovered_b = recover([1 => $shares2[1], 2 => $shares2[2], 3 => $shares2[3]]);
+echo "Both share-sets recover the secret: "
+    . ($recovered_a === $secret && $recovered_b === $secret ? "YES" : "NO") . "\n";
 
 echo "\n=== Test 3: Binary data ===\n";
 $binary_secret = "Binary \x00\x01\x02\xFF\xFE data";
@@ -84,8 +93,9 @@ Recovered matches (threshold): YES
 Recovered matches (4 shares): YES
 Recovered matches (all shares): YES
 
-=== Test 2: Determinism ===
-Same input produces same shares: YES
+=== Test 2: Non-determinism (Shamir security property) ===
+Two splits produce different shares: YES
+Both share-sets recover the secret: YES
 
 === Test 3: Binary data ===
 Binary secret recovered: YES
