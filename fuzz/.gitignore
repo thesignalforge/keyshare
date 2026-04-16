@@ -1,0 +1,5 @@
+harness
+gen_corpus
+artifacts/
+# Keep seed corpus, ignore fuzzer-discovered inputs
+corpus/[0-9a-f]*
